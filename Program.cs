@@ -7,6 +7,8 @@ using System.Text.Json;
 
 class Program
 {
+	private static readonly HttpClient httpClient = new HttpClient();
+
 	static async Task Main(string[] args)
 	{
 		// appsettings.jsonからclientIdとtenantIdを取得
@@ -32,6 +34,9 @@ class Program
 		var token = await credential.GetTokenAsync(new Azure.Core.TokenRequestContext(scopes));
 		Console.WriteLine("GraphAPI認証成功");
 
+		// HttpClientのAuthorizationヘッダーを設定
+		httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token.Token);
+
 		// ファイル名を日時形式で生成
 		string timeStamp = DateTime.Now.ToString("yyyyMMddHHmmss");
 		string newExcelFileName = $"{timeStamp}.xlsx";
@@ -42,9 +47,6 @@ class Program
 
 		try
 		{
-			var httpClient = new HttpClient();
-			httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token.Token);
-
 			// OneDriveのDrive情報取得
 			var driveRes = await httpClient.GetAsync("https://graph.microsoft.com/v1.0/me/drive");
 			var driveJson = await driveRes.Content.ReadAsStringAsync();
