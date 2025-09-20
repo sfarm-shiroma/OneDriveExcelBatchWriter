@@ -75,6 +75,7 @@ To sign in, use a web browser to open the page https://microsoft.com/devicelogin
 - `appsettings.json`には機密情報が含まれるため、GitHubなどの公開リポジトリにアップロードしないでください。
 - 必要に応じて`.gitignore`に`appsettings.json`を追加してください。
 - Microsoft Entra IDの設定が正しくない場合、認証エラーが発生します。
+- **アップロード先はOneDriveのルートディレクトリ直下になります。必要に応じてプログラムを修正してください。**
 
 ## ライセンス
 このプロジェクトはMITライセンスの下で提供されています。
