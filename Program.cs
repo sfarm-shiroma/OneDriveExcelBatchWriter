@@ -48,7 +48,7 @@ class Program
 		try
 		{
 			// OneDriveのDrive情報取得
-			var driveRes = await httpClient.GetAsync("https://graph.microsoft.com/v1.0/me/drive");
+			var driveRes = await SendRequestWithRetry(() => httpClient.GetAsync("https://graph.microsoft.com/v1.0/me/drive"));
 			var driveJson = await driveRes.Content.ReadAsStringAsync();
 			var driveId = System.Text.Json.JsonDocument.Parse(driveJson).RootElement.GetProperty("id").GetString();
 			if (string.IsNullOrEmpty(driveId))
@@ -61,7 +61,7 @@ class Program
 			using (var stream = System.IO.File.OpenRead(tempExcelPath))
 			{
 				var uploadUrl = $"https://graph.microsoft.com/v1.0/drives/{driveId}/root:/{newExcelFileName}:/content";
-				var uploadRes = await httpClient.PutAsync(uploadUrl, new StreamContent(stream));
+				var uploadRes = await SendRequestWithRetry(() => httpClient.PutAsync(uploadUrl, new StreamContent(stream)));
 				if (!uploadRes.IsSuccessStatusCode)
 				{
 					Console.WriteLine($"アップロード失敗: {uploadRes.StatusCode} {await uploadRes.Content.ReadAsStringAsync()}");
@@ -86,7 +86,7 @@ class Program
 						string cellPatchBody = $"{{\"values\":[[\"{cellValue}\"]]}}";
 						var cellContent = new StringContent(cellPatchBody, System.Text.Encoding.UTF8, "application/json");
 						string cellPatchUrl = $"https://graph.microsoft.com/v1.0/me/drive/items/{itemId}/workbook/worksheets('Sheet1')/range(address='{cellAddress}')";
-						var cellPatchRes = await httpClient.PatchAsync(cellPatchUrl, cellContent);
+						var cellPatchRes = await SendRequestWithRetry(() => httpClient.PatchAsync(cellPatchUrl, cellContent));
 						if (!cellPatchRes.IsSuccessStatusCode)
 						{
 							Console.WriteLine($"セル更新失敗: {cellPatchRes.StatusCode} {await cellPatchRes.Content.ReadAsStringAsync()}");
@@ -108,6 +108,42 @@ class Program
 			{
 				System.IO.File.Delete(tempExcelPath);
 				Console.WriteLine("一時ファイル削除完了");
+			}
+		}
+	}
+
+	private static async Task<HttpResponseMessage> SendRequestWithRetry(Func<Task<HttpResponseMessage>> requestFunc)
+	{
+		const int maxRetries = 5;
+		int retryCount = 0;
+
+		while (true)
+		{
+			var response = await requestFunc();
+
+			if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+			{
+				retryCount++;
+				if (retryCount > maxRetries)
+				{
+					Console.WriteLine("リトライ回数が上限に達しました。");
+					throw new Exception("レートリミットエラー: リトライ回数超過");
+				}
+
+				if (response.Headers.TryGetValues("Retry-After", out var values) && int.TryParse(values.FirstOrDefault(), out int retryAfterSeconds))
+				{
+					Console.WriteLine($"レートリミットに達しました。{retryAfterSeconds}秒後にリトライします。");
+					await Task.Delay(retryAfterSeconds * 1000);
+				}
+				else
+				{
+					Console.WriteLine("レートリミットに達しました。1秒後にリトライします。");
+					await Task.Delay(1000);
+				}
+			}
+			else
+			{
+				return response;
 			}
 		}
 	}
