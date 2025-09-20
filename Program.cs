@@ -1,0 +1,112 @@
+﻿using Microsoft.Identity.Client;
+using Microsoft.Graph;
+using Azure.Identity;
+using Microsoft.Graph.Models;
+using System.Threading.Tasks;
+using System.Text.Json;
+
+class Program
+{
+	static async Task Main(string[] args)
+	{
+		// appsettings.jsonからclientIdとtenantIdを取得
+		var configText = System.IO.File.ReadAllText("appsettings.json");
+		var config = JsonDocument.Parse(configText).RootElement;
+		string clientId = config.GetProperty("clientId").GetString() ?? "";
+		string tenantId = config.GetProperty("tenantId").GetString() ?? "";
+		var scopes = new[] { "Files.ReadWrite" };
+
+		// Azure.IdentityのDeviceCodeCredentialを使った認証
+		var options = new DeviceCodeCredentialOptions
+		{
+			TenantId = tenantId,
+			ClientId = clientId,
+			DeviceCodeCallback = (code, cancellation) =>
+			{
+				Console.WriteLine(code.Message);
+				return Task.CompletedTask;
+			}
+		};
+		// DeviceCodeCredentialの認証を1回だけに最適化
+		var credential = new DeviceCodeCredential(options);
+		var token = await credential.GetTokenAsync(new Azure.Core.TokenRequestContext(scopes));
+		Console.WriteLine("GraphAPI認証成功");
+
+		// ファイル名を日時形式で生成
+		string timeStamp = DateTime.Now.ToString("yyyyMMddHHmmss");
+		string newExcelFileName = $"{timeStamp}.xlsx";
+		string tempExcelPath = $"Templates/{newExcelFileName}";
+
+		// EmptyExcel.xlsxをコピー
+		System.IO.File.Copy("Templates/EmptyExcel.xlsx", tempExcelPath, true);
+
+		try
+		{
+			var httpClient = new HttpClient();
+			httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token.Token);
+
+			// OneDriveのDrive情報取得
+			var driveRes = await httpClient.GetAsync("https://graph.microsoft.com/v1.0/me/drive");
+			var driveJson = await driveRes.Content.ReadAsStringAsync();
+			var driveId = System.Text.Json.JsonDocument.Parse(driveJson).RootElement.GetProperty("id").GetString();
+			if (string.IsNullOrEmpty(driveId))
+			{
+				Console.WriteLine("DriveId取得失敗");
+				return;
+			}
+
+			// ファイルアップロード（PUT）
+			using (var stream = System.IO.File.OpenRead(tempExcelPath))
+			{
+				var uploadUrl = $"https://graph.microsoft.com/v1.0/drives/{driveId}/root:/{newExcelFileName}:/content";
+				var uploadRes = await httpClient.PutAsync(uploadUrl, new StreamContent(stream));
+				if (!uploadRes.IsSuccessStatusCode)
+				{
+					Console.WriteLine($"アップロード失敗: {uploadRes.StatusCode} {await uploadRes.Content.ReadAsStringAsync()}");
+					return;
+				}
+				var uploadJson = await uploadRes.Content.ReadAsStringAsync();
+				var uploadDoc = System.Text.Json.JsonDocument.Parse(uploadJson);
+				var itemId = uploadDoc.RootElement.GetProperty("id").GetString();
+				var webUrl = uploadDoc.RootElement.GetProperty("webUrl").GetString();
+				Console.WriteLine($"アップロード完了: {webUrl}");
+
+				System.Threading.Thread.Sleep(1000);
+
+				// 9×9のセルに九九の値をOneDrive上のExcelに入力
+				for (int row = 1; row <= 9; row++)
+				{
+					for (int col = 1; col <= 9; col++)
+					{
+						string colLetter = ((char)('A' + col - 1)).ToString();
+						string cellAddress = $"{colLetter}{row}";
+						int cellValue = row * col;
+						string cellPatchBody = $"{{\"values\":[[\"{cellValue}\"]]}}";
+						var cellContent = new StringContent(cellPatchBody, System.Text.Encoding.UTF8, "application/json");
+						string cellPatchUrl = $"https://graph.microsoft.com/v1.0/me/drive/items/{itemId}/workbook/worksheets('Sheet1')/range(address='{cellAddress}')";
+						var cellPatchRes = await httpClient.PatchAsync(cellPatchUrl, cellContent);
+						if (!cellPatchRes.IsSuccessStatusCode)
+						{
+							Console.WriteLine($"セル更新失敗: {cellPatchRes.StatusCode} {await cellPatchRes.Content.ReadAsStringAsync()}");
+						}
+					}
+				}
+
+				Console.WriteLine("セルへの書き込み完了");
+			}
+		}
+		catch (Exception ex)
+		{
+			Console.WriteLine($"エラー発生: {ex.Message}");
+		}
+		finally
+		{
+			// 一時ファイル削除
+			if (System.IO.File.Exists(tempExcelPath))
+			{
+				System.IO.File.Delete(tempExcelPath);
+				Console.WriteLine("一時ファイル削除完了");
+			}
+		}
+	}
+}

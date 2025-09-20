@@ -1,0 +1,6 @@
+# Exclude sensitive files
+appsettings.json
+
+# Exclude build artifacts
+bin/
+obj/
